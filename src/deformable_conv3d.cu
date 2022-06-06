@@ -24,7 +24,7 @@ __device__ scalar_t deform_conv3d_im2col_trilinear(
 
   h_low = ((h_low % height) + height) % height;
   h_high = ((h_high % height) + height) % height;
-/*
+//Version1
   scalar_t v1 = 0;
   if (w_low >= 0 && l_low >= 0)
     assert (h_low>=0);
@@ -57,8 +57,9 @@ __device__ scalar_t deform_conv3d_im2col_trilinear(
   if (w_high <= width - 1 && l_high<= length -1)
     assert (h_high<=height - 1);
     v8 = bottom_data[h_high * data_width*data_length + w_high*data_length+ l_high];
-*/
- 
+
+//Version 2
+/* 
   scalar_t v1 = 0;
   if (h_low >= 0 && w_low >= 0 && l_low >= 0)
     v1 = bottom_data[h_low * data_width*data_length + w_low*data_length+ l_low];
@@ -84,7 +85,7 @@ __device__ scalar_t deform_conv3d_im2col_trilinear(
   scalar_t v8 = 0;
   if (h_high <= height -1 && w_high <= width - 1 && l_high<= length -1)
     v8 = bottom_data[h_high * data_width*data_length + w_high*data_length+ l_high];
-
+*/
   scalar_t w1 = hh * hw *hl, w2 = hh *hw *ll, w3 = hh * lw*hl, w4 = hh * lw* ll;
   scalar_t w5 = lh * hw *hl, w6 = lh *hw *ll, w7 = lh * lw*hl, w8 = lh * lw* ll;
 
