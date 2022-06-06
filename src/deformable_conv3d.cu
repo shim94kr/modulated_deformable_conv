@@ -1,4 +1,8 @@
 #include "config.h"
+#include <assert.h>
+__device__ int modulo_(int a, int b){
+     return a - b * floor(a / b);
+}
 
 template <typename scalar_t>
 __device__ scalar_t deform_conv3d_im2col_trilinear(
@@ -18,6 +22,43 @@ __device__ scalar_t deform_conv3d_im2col_trilinear(
   scalar_t ll = l - l_low;//dl
   scalar_t hh = 1 - lh, hw = 1 - lw, hl = 1 - ll; //1-dh 1-dw 1-dl
 
+  h_low = ((h_low % height) + height) % height;
+  h_high = ((h_high % height) + height) % height;
+/*
+  scalar_t v1 = 0;
+  if (w_low >= 0 && l_low >= 0)
+    assert (h_low>=0);
+    v1 = bottom_data[h_low * data_width*data_length + w_low*data_length+ l_low];
+  scalar_t v2 = 0;
+  if (w_low >=0 && l_high<= length -1)
+    assert (h_low>=0);
+    v2 = bottom_data[h_low * data_width*data_length + w_low*data_length+ l_high];
+  scalar_t v3 = 0;
+  if (w_high <= width - 1 && l_low  >= 0)
+    assert (h_low>=0);
+    v3 = bottom_data[h_low * data_width*data_length + w_high*data_length+ l_low];
+  scalar_t v4 = 0;
+  if (w_high <= width - 1 && l_high<= length -1)
+    assert (h_low>=0);
+    v4 = bottom_data[h_low * data_width*data_length + w_high*data_length+ l_high];
+  scalar_t v5 = 0;
+  if (w_low >= 0 && l_low >= 0)
+    assert (h_high<=height - 1);
+    v5 = bottom_data[h_high * data_width*data_length + w_low*data_length+ l_low];
+  scalar_t v6 = 0;
+  if (w_low >=0 && l_high<= length -1)
+    assert (h_high<=height - 1);
+    v6 = bottom_data[h_high * data_width*data_length + w_low*data_length+ l_high];
+  scalar_t v7 = 0;
+  if (w_high <= width - 1 && l_low  >= 0)
+    assert (h_high<=height - 1);
+    v7 = bottom_data[h_high * data_width*data_length + w_high*data_length+ l_low];
+  scalar_t v8 = 0;
+  if (w_high <= width - 1 && l_high<= length -1)
+    assert (h_high<=height - 1);
+    v8 = bottom_data[h_high * data_width*data_length + w_high*data_length+ l_high];
+*/
+ 
   scalar_t v1 = 0;
   if (h_low >= 0 && w_low >= 0 && l_low >= 0)
     v1 = bottom_data[h_low * data_width*data_length + w_low*data_length+ l_low];
@@ -132,13 +173,16 @@ void deform_conv3d_im2col_cuda(
 	  // num_axes should be smaller than block size
   const int channel_per_deformable_group = channels / deformable_group;
   const int num_kernels = channels * batch_size * height_col * width_col *length_col;
+  const unsigned int threads = GET_THREADS();
+  const unsigned int blocks = GET_BLOCKS(threads, num_kernels);
+
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
       data_im.scalar_type(), "deform_conv3d_im2col_gpu_kernel", ([&] {
         const scalar_t *data_im_ = data_im.data_ptr<scalar_t>();
         const scalar_t *data_offset_ = data_offset.data_ptr<scalar_t>();
         scalar_t *data_col_ = data_col.data_ptr<scalar_t>();
 
-        deform_conv3d_im2col_gpu_kernel<<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS>>>(
+        deform_conv3d_im2col_gpu_kernel<<<blocks, threads>>>(
             num_kernels, data_im_, data_offset_,
             height_im, width_im, length_im,
             kernel_h, kenerl_w,kenerl_l,
@@ -157,7 +201,7 @@ void deform_conv3d_im2col_cuda(
   }
 }
 
-int deform_conv3d_forward_cuda(
+at::Tensor deform_conv3d_forward_cuda(
 		at::Tensor input, at::Tensor weight,at::Tensor bias,
         at::Tensor offset, at::Tensor output,
         const int kernel_h,const int kernel_w,const int kernel_l,
@@ -252,7 +296,7 @@ int deform_conv3d_forward_cuda(
     output += bias.view({1, bias.size(0), 1, 1, 1});
   input=input.view({batch,channels,height,width,length});
   offset=offset.view({batch,deformable_group * 3 *kernel_h*kernel_w*kernel_l,height_out,width_out,length_out});
-  return 0;
+  return output;
 }
 
 
@@ -402,6 +446,8 @@ void deform_conv3d_gradient_cuda(
 {
   const int num_kernels =channels*height_col * width_col * length_col * kernel_h * kernel_w * kernel_l *step;
   const int channel_per_deformable_group =3 * kernel_h * kernel_w * kernel_l;
+  const unsigned int threads = GET_THREADS();
+  const unsigned int blocks = GET_BLOCKS(threads, num_kernels);
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
         grad_col.scalar_type(), "deform_conv3d_gradient_gpu_kernel", ([&] {
@@ -412,7 +458,7 @@ void deform_conv3d_gradient_cuda(
         scalar_t *grad_input_ = grad_input.data<scalar_t>();
         scalar_t *grad_offset_ = grad_offset.data<scalar_t>();
 
-        deform_conv3d_gradient_gpu_kernel<<<GET_BLOCKS(num_kernels), CUDA_NUM_THREADS>>>(
+        deform_conv3d_gradient_gpu_kernel<<<blocks, threads>>>(
             num_kernels, grad_col_, data_input_, data_offset_,columns_,
             channels, height_input, width_input, length_input,
             kernel_h, kernel_w, kernel_l,
@@ -431,7 +477,7 @@ void deform_conv3d_gradient_cuda(
   }
 }
 
-int deform_conv3d_backward_cuda(
+py::tuple deform_conv3d_backward_cuda(
     at::Tensor input, at::Tensor weight, at::Tensor bias,at::Tensor offset,
     at::Tensor grad_input, at::Tensor grad_weight, at::Tensor grad_bias,
     at::Tensor grad_offset, at::Tensor grad_output,
@@ -557,13 +603,14 @@ int deform_conv3d_backward_cuda(
 	  	  	  	  	  height_out,width_out,length_out});
   grad_offset=grad_offset.view({batch,deformable_group * 3 * kernel_h * kernel_w *kernel_l,
   	  	  	  	  	  height_out,width_out,length_out});
-  return 0;
+
+    py::tuple out=py::make_tuple(grad_input, grad_offset, grad_weight, grad_bias);
+    return out;
 }
 
-
-
-
-
-
-
-
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+    m.def("deform_conv3d_forward_cuda", &deform_conv3d_forward_cuda,
+            "deform_conv3d_forward_cuda");
+    m.def("deform_conv3d_backward_cuda", &deform_conv3d_backward_cuda,
+            "deform_conv3d_backward_cuda");
+}

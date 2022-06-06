@@ -252,12 +252,100 @@ class DeformConv3dFunction(Function):
     def _infer_shape(ctx, input, weight):
         n = input.size(0)
         channels_out = weight.size(0)
-        height, width,length = input.shape[2:5]
-        kernel_h, kernel_w ,kernel_l= weight.shape[2:5]
+        height, width, length = input.shape[2:5]
+        kernel_h, kernel_w, kernel_l = weight.shape[2:5]
         height_out = (height + 2 * ctx.padding[0] - (ctx.dilation[0] * (kernel_h - 1) + 1)) // ctx.stride[0] + 1
         width_out = (width + 2 * ctx.padding[1] - (ctx.dilation[1] * (kernel_w - 1) + 1)) // ctx.stride[1] + 1
         length_out = (length + 2 * ctx.padding[2] - (ctx.dilation[2] * (kernel_l - 1) + 1)) // ctx.stride[2] + 1
         return n, channels_out, height_out, width_out, length_out
+
+
+class EquivDeformConv3dFunction(Function):
+    @staticmethod
+    def forward(ctx, input, offset, weight, bias=None, stride=1, padding=0, dilation=1,
+                groups=1, deformable_groups=1 , in_step=64):
+        ctx.stride = (1, ) + _pair(stride)
+        ctx.padding = (0, ) + _pair(padding)
+        ctx.dilation = (1, ) + _pair(dilation)
+        ctx.groups = groups
+        ctx.deformable_groups = deformable_groups
+        ctx.in_step = in_step
+        ctx.with_bias = bias is not None
+        if not ctx.with_bias:
+            bias = input.new_empty(0)  # fake tensor
+        if not input.is_cuda:
+            raise NotImplementedError
+        if weight.requires_grad or offset.requires_grad or input.requires_grad:
+            ctx.save_for_backward(input, offset, weight, bias)
+        output = input.new_empty(EquivDeformConv3dFunction._infer_shape(ctx, input, weight))
+
+        MDCONV_CUDA.equiv_deform_conv3d_forward_cuda(
+            input, weight, bias, offset, output,
+            weight.shape[2],weight.shape[3],weight.shape[4],
+            ctx.stride[0], ctx.stride[1],ctx.stride[2],
+            ctx.padding[0], ctx.padding[1],ctx.padding[2],
+            ctx.dilation[0],ctx.dilation[1],ctx.dilation[2],
+            ctx.groups, ctx.deformable_groups,ctx.in_step, ctx.with_bias)
+        '''
+        int equiv_deform_conv3d_forward_cuda(
+                at::Tensor input, at::Tensor weight,at::Tensor bias,
+                at::Tensor offset, at::Tensor output,
+                const int kernel_h,const int kernel_w,const int kernel_l,
+                const int stride_h,const int stride_w,const int stride_l,
+                const int pad_h,const int pad_w,const int pad_l,
+                const int dilation_h,const int dilation_w,const int dilation_l,
+                const int group,const int deformable_group, const int in_step,const bool with_bias);
+        '''
+        return output
+
+    @staticmethod
+    @once_differentiable
+    def backward(ctx, grad_output):
+        grad_output=grad_output.contiguous()
+        # print(grad_output)
+        if not grad_output.is_cuda:
+            raise NotImplementedError
+        input, offset, weight, bias = ctx.saved_tensors
+        grad_input = torch.zeros_like(input)
+        grad_offset = torch.zeros_like(offset)
+        grad_weight = torch.zeros_like(weight)
+        grad_bias = torch.zeros_like(bias)
+        MDCONV_CUDA.equiv_deform_conv3d_backward_cuda(
+            input, weight, bias, offset,
+            grad_input, grad_weight,grad_bias,grad_offset, grad_output,
+            weight.shape[2], weight.shape[3],weight.shape[4],
+            ctx.stride[0], ctx.stride[1], ctx.stride[2],
+            ctx.padding[0], ctx.padding[1], ctx.padding[2],
+            ctx.dilation[0], ctx.dilation[1],ctx.dilation[2],
+            ctx.groups, ctx.deformable_groups,ctx.in_step,ctx.with_bias)
+
+        '''
+        int equiv_deform_conv3d_backward_cuda(
+            at::Tensor input, at::Tensor weight, at::Tensor bias,at::Tensor offset,
+            at::Tensor grad_input, at::Tensor grad_weight, at::Tensor grad_bias,
+            at::Tensor grad_offset, at::Tensor grad_output,
+            const int kernel_h,const int kernel_w,const int kernel_l,
+            const int stride_h,const int stride_w,const int stride_l,
+            const int pad_h,const int pad_w,const int pad_l,
+            const int dilation_h,const int dilation_w,const int dilation_l,
+            const int group, int deformable_group,const int in_step,const bool with_bias) ;
+        '''
+        if not ctx.with_bias:
+            grad_bias = None
+
+        return (grad_input, grad_offset, grad_weight, grad_bias, None, None, None, None,None,None)
+
+
+    @staticmethod
+    def _infer_shape(ctx, input, weight):
+        n = input.size(0)
+        channels_out = weight.size(0)
+        length, height, width = input.shape[2:5]
+        kernel_l, kernel_h, kernel_w = weight.shape[2:5]
+        length_out = length
+        height_out = (height + 2 * ctx.padding[1] - (ctx.dilation[1] * (kernel_h - 1) + 1)) // ctx.stride[1] + 1
+        width_out = (width + 2 * ctx.padding[2] - (ctx.dilation[2] * (kernel_w - 1) + 1)) // ctx.stride[2] + 1
+        return n, channels_out, length_out, height_out, width_out
 
 class ModulatedDeformConv3dFunction(Function):
     @staticmethod
@@ -349,6 +437,7 @@ class ModulatedDeformConv3dFunction(Function):
 deform_conv2d = DeformConv2dFunction.apply
 modulated_deform_conv2d = ModulatedDeformConv2dFunction.apply
 deform_conv3d = DeformConv3dFunction.apply
+equiv_deform_conv3d = EquivDeformConv3dFunction.apply
 modulated_deform_conv3d = ModulatedDeformConv3dFunction.apply
 
 class DeformConv2d(nn.Module):

@@ -8,9 +8,15 @@
 #define CONFIG_H_
 #include<iostream>
 #include <ATen/ATen.h>
+#include <ATen/cuda/CUDAContext.h>
 #include <THC/THCAtomics.cuh>
 #include <torch/extension.h>
 #include <pybind11/pybind11.h>
+#include <stdio.h>
+
+#include <c10/cuda/CUDAGuard.h>
+#include <torch/library.h>
+#include<iostream>
 
 using namespace at;
 namespace py = pybind11;
@@ -27,17 +33,23 @@ namespace py = pybind11;
         std::cout<<#left<<" TRY_ALLOCATE failed"<<std::endl;          \
         throw e;               \
     }                          
-    
-      
-const int CUDA_NUM_THREADS = 256;
-const int MAX_GRID_NUM = 65535;
+
+inline unsigned int GET_THREADS() {
+	#ifdef __HIP_PLATFORM_HCC__
+  		return 256;
+	#endif
+		return 512;
+}
+// const int CUDA_NUM_THREADS = 1024;
+// const int MAX_GRID_NUM = 65535;
 
 // const int CUDA_NUM_THREADS = 1;
 // const int MAX_GRID_NUM = 1;
 
-inline int GET_BLOCKS(const int N)
+inline unsigned int GET_BLOCKS(const unsigned int CUDA_NUM_THREADS, const int64_t N)
 {
-  return std::min(MAX_GRID_NUM, (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS);
+	int64_t MAX_GRID_NUM = at::cuda::getCurrentDeviceProperties()->maxGridSize[0];
+	return (unsigned int) std::min(MAX_GRID_NUM, (N + CUDA_NUM_THREADS - 1) / CUDA_NUM_THREADS);
 }
 
 inline int GET_STEP(const int batch,const int step)
